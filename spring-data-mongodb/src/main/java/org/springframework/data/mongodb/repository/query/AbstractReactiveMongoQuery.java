@@ -15,8 +15,8 @@
  */
 package org.springframework.data.mongodb.repository.query;
 
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.context.Context;
 
 import org.reactivestreams.Publisher;
 import org.springframework.core.convert.converter.Converter;
@@ -35,7 +35,6 @@ import org.springframework.data.mongodb.repository.query.ReactiveMongoQueryExecu
 import org.springframework.data.repository.query.ParameterAccessor;
 import org.springframework.data.repository.query.RepositoryQuery;
 import org.springframework.data.repository.query.ResultProcessor;
-import org.springframework.data.repository.query.ReturnedType;
 import org.springframework.util.Assert;
 
 /**
@@ -87,9 +86,7 @@ public abstract class AbstractReactiveMongoQuery implements RepositoryQuery {
 	 * @see org.springframework.data.repository.query.RepositoryQuery#execute(java.lang.Object[])
 	 */
 	public Object execute(Object[] parameters) {
-
-		return method.hasReactiveWrapperParameter() ? executeDeferred(parameters)
-				: execute(new MongoParametersParameterAccessor(method, parameters));
+		return executeDeferred(parameters);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -98,15 +95,15 @@ public abstract class AbstractReactiveMongoQuery implements RepositoryQuery {
 		ReactiveMongoParameterAccessor parameterAccessor = new ReactiveMongoParameterAccessor(method, parameters);
 
 		if (getQueryMethod().isCollectionQuery()) {
-			return Flux.defer(() -> (Publisher<Object>) execute(parameterAccessor));
+			return Mono.subscriberContext().flatMapMany(it -> (Publisher<Object>) execute(parameterAccessor, it));
 		}
 
-		return Mono.defer(() -> (Mono<Object>) execute(parameterAccessor));
+		return Mono.subscriberContext().flatMap(it -> (Mono<Object>) execute(parameterAccessor, it));
 	}
 
-	private Object execute(MongoParameterAccessor parameterAccessor) {
+	private Object execute(MongoParameterAccessor parameterAccessor, Context subscriberContext) {
 
-		Query query = createQuery(new ConvertingParameterAccessor(operations.getConverter(), parameterAccessor));
+		Query query = createQuery(new ContextualParameterAccessor(operations.getConverter(), parameterAccessor, subscriberContext));
 
 		applyQueryMetaAttributesWhenPresent(query);
 
@@ -190,12 +187,23 @@ public abstract class AbstractReactiveMongoQuery implements RepositoryQuery {
 	}
 
 	/**
-	 * Creates a {@link Query} instance using the given {@link ParameterAccessor}
+	 * Creates a {@link Query} instance using the given {@link ParameterAccessor}.
 	 *
 	 * @param accessor must not be {@literal null}.
 	 * @return
 	 */
 	protected abstract Query createQuery(ConvertingParameterAccessor accessor);
+
+	/**
+	 * Creates a {@link Query} instance using the given {@link ContextualParameterAccessor}.
+	 *
+	 * @param accessor must not be {@literal null}.
+	 * @return
+	 * @since 2.1
+	 */
+	protected Query createQuery(ContextualParameterAccessor accessor) {
+		return createQuery((ConvertingParameterAccessor) accessor);
+	}
 
 	/**
 	 * Returns whether the query should get a count projection applied.

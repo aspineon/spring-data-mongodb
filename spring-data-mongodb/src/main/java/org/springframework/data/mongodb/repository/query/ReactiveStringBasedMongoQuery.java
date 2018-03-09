@@ -50,7 +50,7 @@ public class ReactiveStringBasedMongoQuery extends AbstractReactiveMongoQuery {
 	private final boolean isDeleteQuery;
 	private final List<ParameterBinding> queryParameterBindings;
 	private final List<ParameterBinding> fieldSpecParameterBindings;
-	private final ExpressionEvaluatingParameterBinder parameterBinder;
+	private final ExpressionEvaluatingParameterBinderAccessor evaluationContextProviderAccessor;
 
 	/**
 	 * Creates a new {@link ReactiveStringBasedMongoQuery} for the given {@link MongoQueryMethod} and
@@ -84,22 +84,23 @@ public class ReactiveStringBasedMongoQuery extends AbstractReactiveMongoQuery {
 		Assert.notNull(query, "Query must not be null!");
 		Assert.notNull(expressionParser, "SpelExpressionParser must not be null!");
 
-		this.queryParameterBindings = new ArrayList<ParameterBinding>();
+		this.queryParameterBindings = new ArrayList<>();
 		this.query = BINDING_PARSER.parseAndCollectParameterBindingsFromQueryIntoBindings(query,
 				this.queryParameterBindings);
 
-		this.fieldSpecParameterBindings = new ArrayList<ParameterBinding>();
+		this.fieldSpecParameterBindings = new ArrayList<>();
 		this.fieldSpec = BINDING_PARSER.parseAndCollectParameterBindingsFromQueryIntoBindings(
 				method.getFieldSpecification(), this.fieldSpecParameterBindings);
 
-		this.isCountQuery = method.hasAnnotatedQuery() ? method.getQueryAnnotation().count() : false;
-		this.isDeleteQuery = method.hasAnnotatedQuery() ? method.getQueryAnnotation().delete() : false;
+		this.isCountQuery = method.hasAnnotatedQuery() && method.getQueryAnnotation().count();
+		this.isDeleteQuery = method.hasAnnotatedQuery() && method.getQueryAnnotation().delete();
 
 		if (isCountQuery && isDeleteQuery) {
 			throw new IllegalArgumentException(String.format(COUND_AND_DELETE, method));
 		}
 
-		this.parameterBinder = new ExpressionEvaluatingParameterBinder(expressionParser, evaluationContextProvider);
+		this.evaluationContextProviderAccessor = ExpressionEvaluatingParameterBinderAccessor.of(expressionParser,
+				evaluationContextProvider);
 	}
 
 	/*
@@ -108,6 +109,31 @@ public class ReactiveStringBasedMongoQuery extends AbstractReactiveMongoQuery {
 	 */
 	@Override
 	protected Query createQuery(ConvertingParameterAccessor accessor) {
+
+		if (accessor instanceof ContextualParameterAccessor) {
+			return createQuery((ContextualParameterAccessor) accessor);
+		}
+
+		ExpressionEvaluatingParameterBinder parameterBinder = evaluationContextProviderAccessor.getParameterBinder();
+
+		return doCreateQuery(accessor, parameterBinder);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.AbstractReactiveMongoQuery#createQuery(org.springframework.data.mongodb.repository.query.ContextualParameterAccessor)
+	 */
+	@Override
+	protected Query createQuery(ContextualParameterAccessor accessor) {
+
+		ExpressionEvaluatingParameterBinder parameterBinder = evaluationContextProviderAccessor
+				.getParameterBinder(accessor.getContext());
+
+		return doCreateQuery(accessor, parameterBinder);
+	}
+
+	private Query doCreateQuery(ConvertingParameterAccessor accessor,
+			ExpressionEvaluatingParameterBinder parameterBinder) {
 
 		String queryString = parameterBinder.bind(this.query, accessor,
 				new BindingContext(getQueryMethod().getParameters(), queryParameterBindings));
